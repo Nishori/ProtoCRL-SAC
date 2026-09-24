@@ -1,5 +1,7 @@
 import os
-os.add_dll_directory("C:/Users/narde/.mujoco/mujoco200/bin")
+mujoco_path = os.path.expanduser("~/.mujoco/mujoco200/bin")
+if os.path.exists(mujoco_path) and hasattr(os, 'add_dll_directory'):
+    os.add_dll_directory(mujoco_path)
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -102,8 +104,6 @@ env = cw_envs.get_cl_env(
 
 writer = SummaryWriter(log_dir="runs/SAC_ProtoCRL")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")       
-CHECKPOINT_DIR = "checkpoints"
-os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
 
 # CONSTANTS
@@ -215,16 +215,16 @@ class ProtoCRL_Actor(nn.Module):
         h_gmm = h.detach()                                          # do not pass GMM's grad in the encoder
 
         # OBJECTIVE: GET COMPONENTS FOR THE ELBO LOSS
-        # computing the likelihood p(X | teta) = N(X, teta) since we consider teta the "right" parameters. In particular we need log(likelihood) = log(N(X, teta))
+        # computing the likelihood p(X | theta) = N(X, theta) since we consider theta the "right" parameters. In particular we need log(likelihood) = log(N(X, theta))
         diff = h_gmm.unsqueeze(1) - bounded_mu.unsqueeze(0)         
         mahalanobis = (diff ** 2) / torch.exp(clamped_log_sigma.unsqueeze(0))              # the covariance matrix is (by hyphotesis) diagonal making the inverse into 1/sigma
         log_det = clamped_log_sigma.sum(dim=-1).unsqueeze(0)   
         log_likelihood = -0.5 * (log_det + mahalanobis.sum(dim=-1))
         
-        # the prior is p(teta) in the case of a GMM the prob of having that parameters is given by the distribution pi
+        # the prior is p(theta) in the case of a GMM the prob of having that parameters is given by the distribution pi
         log_prior = F.log_softmax(self.pi, dim=0).unsqueeze(0)                                     # taking the softmax ensures that the sum over pi = 1, we take the log for math reason in the following formula
         
-        # the posterior is q(teta | X) which is proportional to prior * likelihood in log terms it becomes a sum                  
+        # the posterior is q(theta | X) which is proportional to prior * likelihood in log terms it becomes a sum                  
         log_posterior = F.log_softmax(log_prior + log_likelihood / POST_TEMP, dim=-1)             # taking softmax since the posterior must be a distribution      
         posterior = torch.exp(log_posterior)            
 
@@ -237,7 +237,7 @@ class ProtoCRL_Actor(nn.Module):
             writer.add_scalar("Encoder/h_batch_std", h.std(dim=0).mean().item(), step)  # average per-dim std across the batch         
 
             with torch.no_grad():
-                # tracking raw distances by synnubg across the 256 dimensions first to get total distance per cluster (Shape: batch, 7)
+                # tracking raw distances by summing across the 256 dimensions first to get total distance per cluster (Shape: batch, 7)
                 cluster_dists = mahalanobis.sum(dim=-1) 
                 min_dist, closest_ids = cluster_dists.min(dim=-1)
                 max_dist, furthest_ids = cluster_dists.max(dim=-1)
@@ -421,7 +421,7 @@ def compute_ProtoCRL_Loss(data, step = None, actorLoss = None, posterior = None,
     # posterior is of shape [batch_size, K]
     # log(p(x)) = sum (probability of being in that gaussian (posterior) * value we have (likelihood))  following the definition of expected value
     log_p = (posterior * log_likelihood).sum(dim=-1).mean()
-    # KL divergence sum(q(teta | X) * (log(q(teta | X) - log(p(teta))))
+    # KL divergence sum(q(theta | X) * (log(q(theta | X) - log(p(theta))))
     kl = (posterior * (log_posterior - log_prior)).sum(dim=-1).mean()
     L_elbo = - ALPHA_LOGP * log_p + ALPHA_KL * kl 
 
